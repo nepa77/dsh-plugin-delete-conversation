@@ -88,7 +88,7 @@ curl -X POST http://127.0.0.1:<端口>/dsh-plugin-delete-conversation/delete \
   -d '{"sessionId":"session-0123abcd-..."}'
 ```
 
-端口与你的 Harness 界面一致。成功时返回：
+端口以 Harness 界面的地址为准。成功时返回：
 
 ```json
 {
