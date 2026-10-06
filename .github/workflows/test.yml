@@ -1,0 +1,47 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  suite:
+    name: node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # The suite is zero-dependency on purpose: no install step, so a green run means
+      # the plugin's own two files are sound rather than that npm resolved something.
+      - name: Run the plugin's own suite
+        run: node test/delete-conversation.test.mjs
+
+      - name: Host half parses
+        run: node --check src/index.js
+
+      - name: Client half parses
+        run: node --check src/client.js
+
+  docs:
+    name: README paths and manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Every file the README tells a reader to open or run must actually be here, and
+      # every entry in the manifest's `files` list must exist. The repository root IS the
+      # package, so a stale path is easy to introduce and hard to notice.
+      - name: README paths and manifest `files`
+        run: node tools/check-readme-paths.mjs

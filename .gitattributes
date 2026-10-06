@@ -1,0 +1,10 @@
+# Line endings: keep text as LF in the repository whatever the checkout does, so a
+# Windows clone and a macOS clone produce identical commits.
+* text=auto eol=lf
+
+# The packer's output is build output, not source.
+dist/** linguist-generated
+
+# Keep the language stats honest: this is a JavaScript plugin, not a docs dump.
+*.md linguist-documentation
+skill/** linguist-documentation

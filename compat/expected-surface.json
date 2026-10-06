@@ -1,0 +1,232 @@
+{
+  "plugin": "dsh-plugin-delete-conversation",
+  "pluginVersion": "0.1.5",
+  "adaptedFor": {
+    "capturedAt": "2026-08-24",
+    "dshBuild": "DSH desktop nightly (profile 'desktop'), captured from the live inspector surface of the running Host and Client",
+    "referenceSource": "github.com/deepseek-ai/deepseek-harness, commit b150a551b8 (docs site + source mirror); npm @deepseek-ai/* published line 0.2.0-rc.2",
+    "captureMethod": "cordis_inspect_query over the live runtime: host Service/Event/Config/Tool, client Service/Slots/Builtin/Theme"
+  },
+  "howToRefresh": {
+    "principle": "This file is a RECORD, not a contract. The contract is the live inspector surface; re-read it before trusting anything below.",
+    "steps": [
+      "cordis_inspect_list (host + client) to see which Inspect Providers this build registers",
+      "host Service.listService with no 'service' for the directory; then with service=<key> for the exact contract + referenced types",
+      "host Event.listEvents; then with event=<name> for the structured listener contract",
+      "host Config.listConfigs with name='dsh-plugin-delete-conversation' to confirm the loader entry is live, and with entry='include:delete-conversation' for its projected Config presence",
+      "client Slots.listSubTree (no root) for the tree, then with root='sidebar.workspaces.session.menu.item' for the slot contract and its occupants",
+      "client Service.listService and client Builtin.listBuiltins before touching the client bundle",
+      "client Theme.listTokens before touching theme tokens",
+      "diff the result against seams[] below, patch only what moved, bump pluginVersion/adaptedFor, and re-run the doctor route"
+    ]
+  },
+  "seams": [
+    {
+      "id": "storageDomain.get",
+      "where": "host",
+      "access": "ctx.get('storageDomain')",
+      "expected": "{ get(name) => DomainImpl | undefined, open(spec), closeAll() } — the mounted domain facility",
+      "code": "src/index.js: deleteConversation(), buildDoctorReport()",
+      "failureMode": "required — delete refuses with 'workspace-domain-unavailable'; nothing is touched",
+      "observed": "present"
+    },
+    {
+      "id": "domain:workspace",
+      "where": "host",
+      "access": "ctx.get('storageDomain').get('workspace')",
+      "expected": "domain name 'workspace', version 2, default 'single' layout; table('workspaces') => {get,entries,keys,size,put,delete,update}; global => {get,set}",
+      "code": "src/index.js: deleteConversation() steps 3 and 4",
+      "failureMode": "required (domain) / fallback (table, global)",
+      "observed": "present; on disk at <dshHome>/storages/workspace.json with unit {name:'workspace',version:2}"
+    },
+    {
+      "id": "domain-record:workspace.workspaces",
+      "where": "host",
+      "access": "table('workspaces').entries() / get() / put()",
+      "expected": "record {path: string, title: string, sessionIds: string[], createdAt: string, updatedAt: string}; key = WorkspaceId",
+      "code": "src/index.js: isWorkspaceRecord(), without()",
+      "failureMode": "fallback — only used when Workspace.detachSession is unavailable; unknown shapes are reported as warnings, never written",
+      "observed": "present"
+    },
+    {
+      "id": "domain-global:workspace",
+      "where": "host",
+      "access": "domain.global.get() / set()",
+      "expected": "{initialized: boolean, defaultWorkspaceId?: string, workspaceIds: string[], archivedSessionIds: string[] (default []), pinnedSessionIds: string[] (default []), pendingMutation?: {operation:'create'|'delete', workspaceId}}",
+      "code": "src/index.js: deleteConversation() step 4 fallback",
+      "failureMode": "fallback — preserves every untouched field and waits out pendingMutation before writing",
+      "observed": "present"
+    },
+    {
+      "id": "workspaceRegistry.archiveSession",
+      "where": "host",
+      "access": "ctx.get('workspaceRegistry').archiveSession(sessionId, { stopActivity: true })",
+      "expected": "writes archivedSessionIds + drops pinnedSessionIds in one durable global write, then ctx.parallel('workspace/session-stop', {sessionId}). Order is the safety property: durable gate first, stop second.",
+      "code": "src/index.js: deleteConversation() step 0",
+      "failureMode": "required when the Session is live — otherwise delete refuses with 'stop-path-unavailable'",
+      "observed": "present"
+    },
+    {
+      "id": "workspaceRegistry.list + Workspace.detachSession",
+      "where": "host",
+      "access": "ctx.get('workspaceRegistry').list() => Workspace[]; workspace.detachSession(sessionId)",
+      "expected": "the only shipped writer that removes an id from a workspace record's sessionIds",
+      "code": "src/index.js: deleteConversation() step 3",
+      "failureMode": "fallback — the workspace table is edited directly when this is missing",
+      "observed": "present"
+    },
+    {
+      "id": "workspaceRegistry.unarchiveSession / unpinSession",
+      "where": "host",
+      "access": "ctx.get('workspaceRegistry').unarchiveSession(id) / unpinSession(id)",
+      "expected": "clears archivedSessionIds / pinnedSessionIds through the registry's serialized write chain and emits domain/changed",
+      "code": "src/index.js: deleteConversation() step 4 (deliberately last, so the archive gate outlives the physical delete)",
+      "failureMode": "fallback — the domain global is written directly when these are missing",
+      "observed": "present"
+    },
+    {
+      "id": "sessions.get",
+      "where": "host",
+      "access": "ctx.get('sessions').get(sessionId)",
+      "expected": "in-memory session store; returns the live Session or undefined. There is no dispose/close API.",
+      "code": "src/index.js: deleteConversation() step 0 liveness check",
+      "failureMode": "optional — without it the plugin cannot detect a live Session and deletes blind",
+      "observed": "present"
+    },
+    {
+      "id": "agents.get",
+      "where": "host",
+      "access": "ctx.get('agents').get(sessionId)?.status === 'running'",
+      "expected": "agent registry; status is 'idle' | 'running'",
+      "code": "src/index.js: isRunning(), used before and after the stop request",
+      "failureMode": "optional",
+      "observed": "present"
+    },
+    {
+      "id": "sessionPersistence.stat",
+      "where": "host",
+      "access": "ctx.get('sessionPersistence').stat(sessionId)",
+      "expected": "{header:{id,cwd?,createdAt,version,isSeeded,...}, revision, eventCount?, sizeBytes?} | undefined. IMPORTANT: the seam is append-only — create/open/flush/stat/list only, NO delete in any shipped version, so the plugin removes the log directory itself.",
+      "code": "src/index.js: post-delete verification in deleteConversation()",
+      "failureMode": "optional — used for verification only",
+      "observed": "present; no delete API (confirmed in packages/session/session-persistence + session-persistence-jsonl)"
+    },
+    {
+      "id": "layout:session-log",
+      "where": "host",
+      "access": "node:fs over <dshHome>/sessions",
+      "expected": "<dshHome>/sessions/<projectKey(cwd)>/<encodeSegment(sessionId)>/session.v<generation>.jsonl[.zstd]; encodeSegment is injective, so the directory name equals the raw id for every [A-Za-z0-9._-] id; the JSONL backend takes its root from a REQUIRED Config field with no env var, so the plugin probes candidates and matches by id instead of assuming a root",
+      "code": "src/index.js: resolveSessionsRoots(), findSessionDirs()",
+      "failureMode": "required — without a readable root the plugin reports 'no durable log directory was found' as a warning and still unlists",
+      "observed": "present; roots probed: DSH_SESSIONS_DIR, DSH_SESSION_ROOT, ctx.config.sessionsRoot, <dshHome>/sessions, any sibling dir named 'sessions'"
+    },
+    {
+      "id": "domain:session_projcache",
+      "where": "host",
+      "access": "ctx.get('storageDomain').get('session_projcache').table('sessions').delete(id)",
+      "expected": "domain name 'session_projcache', version 7, compatibleVersions [3,4,5,6], layout 'per-record', invalidRecords 'backup-and-skip', table 'sessions' keyed by SessionId",
+      "code": "src/index.js: deleteConversation() step 2",
+      "failureMode": "optional — falls back to unlinking <dshHome>/storages/session_projcache/sessions/<id>.json (derived data; the cache is a fold shortcut, never an authority)",
+      "observed": "present"
+    },
+    {
+      "id": "webServer.register",
+      "where": "host",
+      "access": "ctx.get('webServer').register({kind:'exact', path, handler}) => disposer",
+      "expected": "handler(request, response) with a Node-style readable request and a writeHead/setHeader/end response; duplicate (kind,path) throws",
+      "code": "src/index.js: registerRoutes() — GET <prefix>/doctor, POST <prefix>/delete",
+      "failureMode": "required — the Client row surfaces 404/405 and points at the doctor route",
+      "observed": "present"
+    },
+    {
+      "id": "event:workspace/session-stop",
+      "where": "host",
+      "access": "emitted by archiveSession(..., {stopActivity:true}); mode 'parallel'",
+      "expected": "payload {sessionId}; shipped listeners cancel the running turn (agent.cancel({kind:'user'})), kill owned jobs, cancel running subagents, stop the Session's schedules. Not dispatched directly by this plugin.",
+      "code": "src/index.js: relied on through archiveSession",
+      "failureMode": "required (transitively) — a running Session cannot be stopped without it",
+      "observed": "present"
+    },
+    {
+      "id": "event:domain/changed",
+      "where": "host",
+      "access": "emitted by every durable domain write; consumed by DSH's own watchers",
+      "expected": "{domain, table, key, operation: 'put'|'deleted', value}",
+      "code": "not consumed by this plugin — listed because it is why the sidebar refreshes after a delete",
+      "failureMode": "informational",
+      "observed": "present"
+    },
+    {
+      "id": "skills.register",
+      "where": "host",
+      "access": "ctx.get('skills').register({name, description, whenToUse, content}) => disposer",
+      "expected": "runtime skill contribution; same-name duplicates log a warning instead of throwing, and project/user entries outrank runtime ones",
+      "code": "src/index.js: registerAdaptationSkill() — publishes this plugin's SKILL.md into every Session",
+      "failureMode": "optional — a failure is logged and the file-based skill still applies",
+      "observed": "present"
+    },
+    {
+      "id": "client-service:slots",
+      "where": "client",
+      "access": "exports.inject = ['slots']; ctx.get('slots')",
+      "expected": "slots.inject(key, callback) waits for a slot declaration; slots.register({name,id,order,...}, Component) contributes one cell and returns a disposer",
+      "code": "src/client.js: exports.inject / apply()",
+      "failureMode": "required — without it the browser row never appears",
+      "observed": "present"
+    },
+    {
+      "id": "client-slot:sidebar.workspaces.session.menu.item",
+      "where": "client",
+      "access": "slots.inject + slots.register",
+      "expected": "kind 'list', scope 'root', declared by the sidebar.workspaces occupant; registration {name, id, order?, label?} with id required; owner props {sessionId: SessionId, displayTitle: string}; slotInject hooks {menuOpenState: SlotHookFactory -> UseMenuOpenState (= [open, setOpen] pair), shortcuts}; standard props include useWorkspaces/useSessions/useSessionStatus/useResource/usePanelInfo; must render one role='menuitem' button and close the menu via setMenuOpen(false); shipped occupants pin(100) rename(200) fork(300) archive(400)",
+      "code": "src/client.js: SLOT, ROW_ID='delete-conversation', ROW_ORDER=500, useMenuSetOpen()",
+      "failureMode": "required — if the slot is renamed or its kind changes, the row silently does not render",
+      "observed": "present and registered at order 500, verified live through client Slots.listSubTree"
+    },
+    {
+      "id": "client-bundle:module-loader-envelope",
+      "where": "client",
+      "access": "window.__ModuleLoader__.load({id, factory})",
+      "expected": "a classic script that ONLY registers a factory: window.__ModuleLoader__.load({ id: '<package name>', factory: (require) => { var module = {exports:{}}; var exports = module.exports; ...; return module.exports } }); the factory must export { apply, inject } and may require() only the frozen platform words: react, react/jsx-runtime, react-dom, react-dom/client, @deepseek-ai/cordis, @deepseek-ai/dsh-client-store, @deepseek-ai/dsh-client-ui-slots, @deepseek-ai/dsh-client-ui-primitives, @deepseek-ai/dsh-client-ui-dockkit",
+      "code": "src/client.js: the whole file; package.json exports['./client'] + dsh.client.platform='web'",
+      "failureMode": "required — a wrong envelope or a non-baseline require() throws in the browser and the row disappears from the slot occupants",
+      "observed": "present; the hand-written bundle loaded and registered on the first try"
+    },
+    {
+      "id": "client-theme:tokens",
+      "where": "client",
+      "access": "inline CSS with var(--token, fallback)",
+      "expected": "--dsw-alias-state-error-primary, --dsw-alias-interactive-bg-hover-danger, --dsw-alias-label-caption",
+      "code": "src/client.js: CSS constant",
+      "failureMode": "cosmetic — every token has a literal fallback, so a rename degrades the colour instead of breaking the row",
+      "observed": "present"
+    },
+    {
+      "id": "bridge:http-route",
+      "where": "both",
+      "access": "POST <prefix>/delete with header x-dsh-plugin-delete-conversation and a JSON body {sessionId, stopActivity?}; GET <prefix>/doctor",
+      "expected": "same-origin fetch; custom header is the cross-origin guard (a non-simple header forces a CORS preflight this route never approves); responses are JSON",
+      "code": "src/index.js: registerRoutes(); src/client.js: ROUTE, REQUEST_HEADERS, fetch call",
+      "failureMode": "required for the UI — the row reports HTTP 404/405 with a pointer to the doctor route",
+      "observed": "chosen deliberately: DSH's own @Remote needs generated Typert artifacts, which a no-build plugin cannot produce"
+    },
+    {
+      "id": "package:dsh-manifest",
+      "where": "both",
+      "access": "package.json dsh field",
+      "expected": "dsh.bundle.patch (string|string[]) makes the package installable as a profile bundle; dsh.client {platform:'web', inject?, immediately?, external?} makes its exports['./client'] a boot-graph row; there is no dsh.host/dsh.server field",
+      "code": "package.json, cordis.patch.yml",
+      "failureMode": "required — the client-modules scan throws when dsh.client is declared without exports['./client']",
+      "observed": "present"
+    },
+    {
+      "id": "package:peer-gate",
+      "where": "host",
+      "access": "profile loader peer check",
+      "expected": "peerDependencies on '@deepseek-ai/dsh' and '@deepseek-ai/dsh-*' are checked against one runtime version; MISSING DSH peers impose no constraint",
+      "code": "package.json deliberately declares none",
+      "failureMode": "deliberate — doctor() is the real compatibility check, so a new DSH version cannot block the load",
+      "observed": "present"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+# Scratch, packed artifacts and editor output. Nothing here belongs in the repository:
+# release artifacts are attached to a Release, not committed.
+dist/
+_previews/
+.tmp/
+*.log
+*.tmp
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.idea/
+.vscode/

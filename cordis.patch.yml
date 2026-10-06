@@ -1,0 +1,15 @@
+# dsh-plugin-delete-conversation — the profile layer this bundle contributes.
+#
+# One row is enough: the package IS the Host plugin and the Client bundle, so the
+# entry resolves to the package root (`.`), whose `apply()` registers the
+# `/dsh-plugin-delete-conversation/*` routes, and whose `exports["./client"]`
+# gives the sidebar menu row its browser bundle.
+#
+# Installed by:
+#   dsh plugin --profile desktop add <path or spec>
+# which appends this package to `dsh.profile.bundles` in the profile manifest and
+# applies this file as a patch layer. Removing it:
+#   dsh plugin --profile desktop remove dsh-plugin-delete-conversation
+- insert:
+    - id: delete-conversation
+      name: dsh-plugin-delete-conversation
