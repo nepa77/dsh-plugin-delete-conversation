@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-delete-conversation",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "DeepSeek Harness plugin: a 'Delete session' row in the sidebar session menu that permanently removes a session's durable log, projection cache and workspace membership.",
   "license": "MIT",
   "private": true,

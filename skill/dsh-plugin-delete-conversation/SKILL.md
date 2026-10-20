@@ -7,7 +7,7 @@ description: 当「删除会话」插件的菜单行不工作、消失或报错�
 
 Harness 的插件接口不承诺长期稳定，而本插件必须触碰一些 Harness 没有当作公开 API 的内部能力（会话持久化的磁盘布局、工作区存储域、会话停止路径）。因此它按"随时可以重新适配"来设计：宿主半边不导入任何 `@deepseek-ai/*` 包，所有能力都用 `ctx.get(名称)` 取用并做能力检测；也不声明 `@deepseek-ai/dsh-*` 的 peer 依赖，升级不会因为版本门被拒绝加载。
 
-**版本 0.1.5。** 本插件不与其他 bundle 共享代码，所以 Harness 升级只会影响 `compat/expected-surface.json` 里列出的那些接口面。
+**版本 0.1.6。** 本插件不与其他 bundle 共享代码，所以 Harness 升级只会影响 `compat/expected-surface.json` 里列出的那些接口面。
 
 ## 收到问题报告时的第一步
 
@@ -47,21 +47,33 @@ curl.exe -s http://127.0.0.1:19387/dsh-plugin-delete-conversation/doctor
 | `workspaceRegistry.list()` → `Workspace.detachSession(id)` | 唯一会从 `sessionIds` 里移除会话的官方写入路径 | 消失时自动退化为直接写 `workspaces` 表（保留所有未修改字段） |
 | `workspaceRegistry.unarchiveSession` / `unpinSession` | 清理归档/置顶归属，走 registry 自己的串行写链 | 消失时退化为直接写域 global，并等 `pendingMutation` 结束 |
 | `ctx.get('sessions').get(id)`、`ctx.get('agents').get(id)?.status` | 判断会话是否存活、回合是否仍在运行 | 缺失时无法判断运行状态，应把缺失当成 `required`，不要盲删 |
-| `ctx.get('sessionPersistence').stat(id)` | 读 header（`cwd`）并在删除后复核 | 可选。注意这个接口在任何版本都是只追加的：**没有删除方法**，日志由插件自己删 |
+| `ctx.get('sessionPersistence').stat(id)` | 读 header（`cwd`）并在删除后复核；0.2.1 起快照多了一个 `formatStatus?: 'current' \| 'migration-required'`，只作信息用 | 可选。注意这个接口在任何版本都是只追加的：**没有删除方法**，日志由插件自己删 |
 | 会话日志的磁盘布局 | `<dshHome>/sessions/<projectKey(cwd)>/<sessionId>/session.v*.jsonl[.zstd]` | 布局变化时改 `findSessionDirs()`；插件按 id 在候选根目录下扫描，不自己计算 projectKey。JSONL 后端的根来自一个必填 Config 字段且没有环境变量，因此候选根包括 `DSH_SESSIONS_DIR`、`DSH_SESSION_ROOT`、`ctx.config.sessionsRoot`、`<dshHome>/sessions`，以及 `dshHome` 下任何名为 `sessions` 的目录 |
 | `session_projcache` 域 | 域 `session_projcache` v7，`per-record` 布局，表 `sessions`，键是 SessionId | 域不可用时自动退化为直接删 `<dshHome>/storages/session_projcache/sessions/<id>.json`（派生数据） |
 | `ctx.get('webServer').register({kind,path,handler})` | `handler(request, response)`，Node 风格的 request 与带 `writeHead/setHeader/end` 的 response | 路由形状变化：浏览器半边会收到 404/405 并提示去看 doctor。也可以迁移到 `connection` 的 `POST api/<endpoint>` JSON-RPC；若愿意引入构建步骤，可以改用 `@Remote` + `ctx.remote` |
 | `ctx.emit('api-session/removed', sessionId)` | Harness 自带的"会话已离开存活注册表"通知，各消费方据此重建列表 | 事件改名时，删除后列表可能残留，需要改成新的通知方式 |
-| `ctx.get('skills').register({name,description,content})` | 把本手册注册成运行时技能 | 可选，失败只记录日志 |
+| `ctx.get('skills').register({name,description,source,content})` | 把本手册注册成运行时技能。`source` 是**必填**字符串（`'runtime'`），缺了不会注册失败，但每次加载都会报 `loaded skill "<name>" source must be a string` | 可选，失败只记录日志；若技能能出现在目录里却加载失败，先查 `source` |
 
 ### 客户端侧
 
 | 依赖面 | 期望 | 失效时怎么办 |
 |---|---|---|
-| 槽位 `sidebar.workspaces.session.menu.item` | `list` 类型、`root` 作用域；注册项 `{name,id,order}`（`id` 必填）；owner props 是 `{sessionId, displayTitle}`；槽位注入钩子 `useMenuOpenState` 返回 `[open, setOpen]`；每条必须渲染一个 `role="menuitem"` 按钮 | 槽位改名或类型变化：用 `Slots.listSubTree` 找新的会话菜单槽位，改 `src/client.js` 顶部的 `SLOT`；关闭菜单的取值方式（当前是 `props.useMenuOpenState()[1]`）也要跟着改 |
+| 槽位 `sidebar.workspaces.session.menu.item` | `list` 类型、`root` 作用域；注册项 `{name,id,order}`（`id` 必填）；owner props 是 `{sessionId, displayTitle}`；槽位注入钩子 `useMenuOpenState` 返回 `[open, setOpen]`；每条必须渲染一个 `role="menuitem"` 按钮。0.2.1 起 Harness 自带行多了一个 `session-id`（order 450），本插件的 500 仍排最后；槽位标准 props 还多了 `useRemoteAccess` / `useSessionAccess` / `useWorkspaceAccess` 访问判定钩子（本插件不使用：它的动作是自己的 HTTP 路由，不是 Remote 端点） | 槽位改名或类型变化：用 `Slots.listSubTree` 找新的会话菜单槽位，改 `src/client.js` 顶部的 `SLOT`；关闭菜单的取值方式（当前是 `props.useMenuOpenState()[1]`）也要跟着改。占用者列表里没有本插件的行，通常意味着 bundle 约定坏了，而不是槽位坏了 |
 | `@deepseek-ai/dsh-client-ui-primitives` 的 `MenuItemButton`（`danger` 变体）与 `IconTrashOutlineRegular` | 平台基线模块，无需 `dsh.client.external`；菜单行的字号 13px / 行高 20px、图标格 14×14、红字与红色悬停都来自它 | 组件或图标改名：`require` 已做保护，会自动退化成本插件自带的同规格按钮与样式；也可以按 client `Builtin.listBuiltins` 与实时包内容改用新的导出名 |
 | bundle 加载约定 | 一个 classic script 只注册工厂：`window.__ModuleLoader__.load({ id, factory })`，工厂返回 `{ apply, inject }`，并且只能 `require()` 平台基线模块 | 约定变化时菜单行会从槽位占用者列表里消失——先用 `Slots.listSubTree` 确认，再改 `src/client.js` 的包装层，或改为真正的构建产物 |
 | 主题变量 | `--dsw-alias-state-error-primary`、`--dsw-alias-interactive-bg-hover-danger`、`--dsw-alias-label-caption` | 都带字面量兜底，改名只影响颜色，不会让行失效；用 client `Theme.listTokens` 核对新名字 |
+
+## 最近一次适配的记录（0.2.0-rc.2 → 0.2.1-rc.2）
+
+这次升级的完整结论也记在 `compat/expected-surface.json` 的 `lastUpgradeDiff` 里，可作为下一次的参照。判断顺序：先用 `plugin_manager list_version_exemptions` 拿到 `runtimeVersion`，再跑 doctor，然后按上面"第一步"重采实时契约，只改真正变了的那一处。
+
+| 变化 | 影响 | 处理 |
+|---|---|---|
+| `skills.register` 的 `source` 成为加载期必填（它一直在 `SkillSummary` 类型里，但 0.2.1 起加载时校验） | 技能仍出现在目录里，但每次加载都失败：`loaded skill "<name>" source must be a string` | 注册时补 `source: 'runtime'`，并改为从 SKILL.md 前置元数据读 `description`，避免两处文案漂移 |
+| `SessionPersistenceSnapshot` 新增 `formatStatus?: 'current' \| 'migration-required'` | 无影响：删除按 id 进行 | 记录进契约 |
+| Harness 自带菜单行新增 `session-id`（order 450） | 无影响：本插件 order 500 仍在最后 | 更新 README 的菜单说明 |
+| 槽位标准 props 新增 `useRemoteAccess` / `useSessionAccess` / `useWorkspaceAccess` | 本插件不使用；它的动作是自己的 HTTP 路由，不是 Remote 端点 | 在 README 的"说明与限制"写明这层权限不覆盖本插件 |
+| 会话日志仍是 `session.v4.jsonl.zstd`；`api-session/removed`、`webServer.register`、`workspace` 存储域、以及 `sessionPersistence` 的"没有删除方法"都没变 | 删除流程无需改动 | doctor 全绿 + 真实删除一次即可确认 |
 
 ## 改动点
 

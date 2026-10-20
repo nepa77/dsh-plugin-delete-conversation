@@ -394,4 +394,42 @@ process.stdout.write('shipped SKILL.md is present and parseable as frontmatter +
   ok('skill file present')
 }
 
+process.stdout.write('the runtime skill registration carries the fields DSH validates\n')
+{
+  // DSH 0.2.1 validates `source` at load time: a registration without it stays in the
+  // catalog but every load fails with `source must be a string`. This asserts the shape
+  // the Host half actually registers, including that the routing text comes from the
+  // SKILL.md frontmatter instead of a second hand-written copy.
+  const skillPath = path.join(import.meta.dirname, '..', 'skill', 'dsh-plugin-delete-conversation', 'SKILL.md')
+  const markdown = await readFile(skillPath, 'utf8')
+  const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(markdown)[1]
+  const frontmatterDescription = /^description:[ ]*(.+)$/m.exec(frontmatter)[1].trim()
+
+  let registered
+  const ctx = {
+    config: {},
+    logger: { info() {}, warn() {} },
+    effect: (callback) => callback(),
+    get: (name) =>
+      name === 'skills'
+        ? {
+            register: (skill) => {
+              registered = skill
+              return () => {}
+            },
+          }
+        : undefined,
+  }
+  plugin.registerAdaptationSkill(ctx)
+
+  assert.ok(registered !== undefined, 'the skill must be registered when ctx.get("skills") answers')
+  assert.equal(registered.name, 'dsh-plugin-delete-conversation')
+  assert.equal(typeof registered.source, 'string', 'source is required by SkillSummary and validated at load time')
+  assert.equal(registered.source, 'runtime')
+  assert.equal(registered.description, frontmatterDescription, 'routing text must come from the frontmatter')
+  assert.equal(registered.content.trimStart().startsWith('---'), false, 'the body must not repeat the frontmatter')
+  assert.match(registered.content.trimStart(), /^# 重新适配/, 'the body is the runbook itself')
+  ok('name + source + frontmatter description + body-only content')
+}
+
 process.stdout.write(`\n${checks} checks passed\n`)

@@ -41,7 +41,11 @@ function Get-Text([string]$url, [string]$method = 'GET', $headers = $null, [stri
 
 Section 'browser bundle'
 $index = Get-Text "$Base/"
-if ($index.status -ne 200) {
+if ($index.status -eq 401) {
+  # The index is served to the desktop window, which carries a session token this
+  # script cannot obtain; that is expected outside the app, not a plugin failure.
+  Write-Host '  skip  the index requires the desktop session token (401); bundle checks skipped'
+} elseif ($index.status -ne 200) {
   Check 'the GUI answers on the given port' $false "(status $($index.status))"
 } else {
   $match = [regex]::Match($index.text, '"id":"dsh-plugin-delete-conversation"[^}]*?"url":"([^"]+)"')

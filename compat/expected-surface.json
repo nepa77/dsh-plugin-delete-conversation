@@ -1,11 +1,13 @@
 {
   "plugin": "dsh-plugin-delete-conversation",
-  "pluginVersion": "0.1.5",
+  "pluginVersion": "0.1.6",
   "adaptedFor": {
-    "capturedAt": "2026-08-24",
+    "capturedAt": "2026-10-20",
     "dshBuild": "DSH desktop nightly (profile 'desktop'), captured from the live inspector surface of the running Host and Client",
-    "referenceSource": "github.com/deepseek-ai/deepseek-harness, commit b150a551b8 (docs site + source mirror); npm @deepseek-ai/* published line 0.2.0-rc.2",
-    "captureMethod": "cordis_inspect_query over the live runtime: host Service/Event/Config/Tool, client Service/Slots/Builtin/Theme"
+    "runtimeVersion": "0.2.1-rc.2",
+    "referenceSource": "github.com/deepseek-ai/deepseek-harness; the previous record was taken at commit b150a551b8 / published line 0.2.0-rc.2",
+    "captureMethod": "cordis_inspect_query over the live runtime: host Service/Event/Config/Tool, client Service/Slots/Builtin/Theme",
+    "lastUpgradeDiff": "0.2.0-rc.2 -> 0.2.1-rc.2. Changes found: skills.register now requires a string `source` (the runtime skill stayed in the catalog but failed to load with 'source must be a string'); SessionPersistenceSnapshot gained formatStatus?: 'current' | 'migration-required'; the shipped session menu gained a session-id row at order 450; the slot's standard props gained useRemoteAccess / useSessionAccess / useWorkspaceAccess. Unchanged: the session log layout is still session.v4.jsonl.zstd, api-session/removed still exists, webServer.register and the workspace storage domain are unchanged, and sessionPersistence still has no delete API."
   },
   "howToRefresh": {
     "principle": "This file is a RECORD, not a contract. The contract is the live inspector surface; re-read it before trusting anything below.",
@@ -106,10 +108,10 @@
       "id": "sessionPersistence.stat",
       "where": "host",
       "access": "ctx.get('sessionPersistence').stat(sessionId)",
-      "expected": "{header:{id,cwd?,createdAt,version,isSeeded,...}, revision, eventCount?, sizeBytes?} | undefined. IMPORTANT: the seam is append-only — create/open/flush/stat/list only, NO delete in any shipped version, so the plugin removes the log directory itself.",
+      "expected": "{header:{id,cwd?,createdAt,version,isSeeded,...}, formatStatus?: 'current' | 'migration-required', revision, eventCount?, sizeBytes?} | undefined. IMPORTANT: the seam is append-only — create/open/flush/stat/list only, NO delete in any shipped version (still true in 0.2.1-rc.2), so the plugin removes the log directory itself.",
       "code": "src/index.js: post-delete verification in deleteConversation()",
-      "failureMode": "optional — used for verification only",
-      "observed": "present; no delete API (confirmed in packages/session/session-persistence + session-persistence-jsonl)"
+      "failureMode": "optional — used for verification only. `formatStatus` is informational: a session pending migration is deleted the same way.",
+      "observed": "present; no delete API (confirmed in packages/session/session-persistence + session-persistence-jsonl); formatStatus added in 0.2.1-rc.2"
     },
     {
       "id": "layout:session-log",
@@ -159,11 +161,11 @@
     {
       "id": "skills.register",
       "where": "host",
-      "access": "ctx.get('skills').register({name, description, whenToUse, content}) => disposer",
-      "expected": "runtime skill contribution; same-name duplicates log a warning instead of throwing, and project/user entries outrank runtime ones",
-      "code": "src/index.js: registerAdaptationSkill() — publishes this plugin's SKILL.md into every Session",
-      "failureMode": "optional — a failure is logged and the file-based skill still applies",
-      "observed": "present"
+      "access": "ctx.get('skills').register({name, description, source, content}) => disposer",
+      "expected": "runtime skill contribution. SkillRegistration = Omit<SkillDefinition, 'invocation' | 'provider'> and SkillDefinition extends SkillSummary, so `source: SkillSource` is REQUIRED ('runtime' is the canonical bucket for a same-process contribution) and DSH validates it when the skill is loaded; same-name duplicates log a warning instead of throwing, and project/user entries outrank runtime ones",
+      "code": "src/index.js: registerAdaptationSkill() — parses name/description out of SKILL.md's frontmatter, publishes the body with source: 'runtime'",
+      "failureMode": "optional — a failure is logged and the file-based skill still applies. A missing `source` is not a registration failure: the skill stays in the catalog but every load fails with `loaded skill \"<name>\" source must be a string` (the 0.2.1-rc.2 breakage this record fixes)",
+      "observed": "present; `source` required since 0.2.1-rc.2"
     },
     {
       "id": "client-service:slots",
@@ -178,10 +180,10 @@
       "id": "client-slot:sidebar.workspaces.session.menu.item",
       "where": "client",
       "access": "slots.inject + slots.register",
-      "expected": "kind 'list', scope 'root', declared by the sidebar.workspaces occupant; registration {name, id, order?, label?} with id required; owner props {sessionId: SessionId, displayTitle: string}; slotInject hooks {menuOpenState: SlotHookFactory -> UseMenuOpenState (= [open, setOpen] pair), shortcuts}; standard props include useWorkspaces/useSessions/useSessionStatus/useResource/usePanelInfo; must render one role='menuitem' button and close the menu via setMenuOpen(false); shipped occupants pin(100) rename(200) fork(300) archive(400)",
+      "expected": "kind 'list', scope 'root', declared by the sidebar.workspaces occupant; registration {name, id, order?, label?} with id required; owner props {sessionId: SessionId, displayTitle: string}; slotInject hooks {menuOpenState: SlotHookFactory -> UseMenuOpenState (= [open, setOpen] pair), shortcuts}; must render one role='menuitem' button and close the menu via setMenuOpen(false). Shipped occupants: pin(100) rename(200) fork(300) archive(400) session-id(450) — session-id was added in 0.2.1-rc.2, so this plugin's 500 still comes last. Standard props (0.2.1-rc.2) include useWorkspaces/useSessions/useSessionStatus/useSessionRetainInfo/useResource/usePanelInfo plus the access hooks useRemoteAccess(action), useSessionAccess(sessionId, action), useWorkspaceAccess(workspaceId, action); this plugin does not use the access hooks, because its action is its own HTTP route rather than a Remote endpoint.",
       "code": "src/client.js: SLOT, ROW_ID='delete-conversation', ROW_ORDER=500, useMenuSetOpen()",
-      "failureMode": "required — if the slot is renamed or its kind changes, the row silently does not render",
-      "observed": "present and registered at order 500, verified live through client Slots.listSubTree"
+      "failureMode": "required — if the slot is renamed or its kind changes, the row silently does not render. An occupant list that no longer contains delete-conversation means the bundle envelope broke, not the slot.",
+      "observed": "present and registered at order 500 (after the shipped session-id row), verified live through client Slots.listSubTree on 0.2.1-rc.2"
     },
     {
       "id": "client-bundle:module-loader-envelope",
