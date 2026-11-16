@@ -1,13 +1,13 @@
 {
   "plugin": "dsh-plugin-delete-conversation",
-  "pluginVersion": "0.1.6",
+  "pluginVersion": "0.1.7",
   "adaptedFor": {
-    "capturedAt": "2026-10-20",
-    "dshBuild": "DSH desktop nightly (profile 'desktop'), captured from the live inspector surface of the running Host and Client",
-    "runtimeVersion": "0.2.1-rc.2",
-    "referenceSource": "github.com/deepseek-ai/deepseek-harness; the previous record was taken at commit b150a551b8 / published line 0.2.0-rc.2",
-    "captureMethod": "cordis_inspect_query over the live runtime: host Service/Event/Config/Tool, client Service/Slots/Builtin/Theme",
-    "lastUpgradeDiff": "0.2.0-rc.2 -> 0.2.1-rc.2. Changes found: skills.register now requires a string `source` (the runtime skill stayed in the catalog but failed to load with 'source must be a string'); SessionPersistenceSnapshot gained formatStatus?: 'current' | 'migration-required'; the shipped session menu gained a session-id row at order 450; the slot's standard props gained useRemoteAccess / useSessionAccess / useWorkspaceAccess. Unchanged: the session log layout is still session.v4.jsonl.zstd, api-session/removed still exists, webServer.register and the workspace storage domain are unchanged, and sessionPersistence still has no delete API."
+    "capturedAt": "2026-11-16",
+    "dshBuild": "DSH desktop nightly (profile 'desktop'), captured from the live inspector surface of the running Host and Client plus the installed upgrade guide",
+    "runtimeVersion": "0.2.2-rc.3",
+    "referenceSource": "installed @deepseek-ai/dsh 0.2.2-rc.3 (app.asar), its docs/upgrade-guide/v0.2.2-alpha.2 and v0.2.2-rc.1 guides, and the shipped packages @deepseek-ai/dsh-client-ui-context-menu + @deepseek-ai/dsh-client-ui-workspace sources",
+    "captureMethod": "cordis_inspect_query over the live runtime: host Service/Event/Config/Tool, client Service/Slots/Builtin/Theme; plus ASAR-aware file reads of the installed package sources and upgrade guides",
+    "lastUpgradeDiff": "0.2.1-rc.2 -> 0.2.2-rc.3 (breaking for this plugin): the session menu moved to the data-driven ctx.contextMenus service (packages/client/ui-context-menu), with the legacy slot sidebar.workspaces.session.menu.item re-labelled 'legacy external rows rendered before the built-in Archive action'; action icons became {key, src?} rendered through the keyed contextMenu.icon slot; MenuActionView gained danger / separatorBefore / afterContent; the confirm interaction must be a shell.overlay Modal. Archiving may now remove the Session's clean worktree (v0.2.2-rc.1/archive-worktrees). Unchanged: the session log layout is session.v4.jsonl.zstd, the workspace domain is v2, session_projcache is v7, api-session/removed still exists, webServer.register and workspaceRegistry archive/detach/unarchive/unpin are unchanged, sessionPersistence still has no delete API, and skills.register still requires a string source."
   },
   "howToRefresh": {
     "principle": "This file is a RECORD, not a contract. The contract is the live inspector surface; re-read it before trusting anything below.",
@@ -63,9 +63,9 @@
       "id": "workspaceRegistry.archiveSession",
       "where": "host",
       "access": "ctx.get('workspaceRegistry').archiveSession(sessionId, { stopActivity: true })",
-      "expected": "writes archivedSessionIds + drops pinnedSessionIds in one durable global write, then ctx.parallel('workspace/session-stop', {sessionId}). Order is the safety property: durable gate first, stop second.",
-      "code": "src/index.js: deleteConversation() step 0",
-      "failureMode": "required when the Session is live — otherwise delete refuses with 'stop-path-unavailable'",
+      "expected": "writes archivedSessionIds + drops pinnedSessionIds in one durable global write, then ctx.parallel('workspace/session-stop', {sessionId}). Order is the safety property: durable gate first, stop second. Since 0.2.2 archiving may also remove the Session's clean worktree through the worktree service (v0.2.2-rc.1/archive-worktrees), which is why this plugin runs the preamble for cold Sessions too and unwinds the gate when a later step fails.",
+      "code": "src/index.js: deleteConversation() step 0 (preamble) and the try/catch that unwinds it",
+      "failureMode": "required when the Session is live — otherwise delete refuses with 'stop-path-unavailable'; for a cold Session a failure is a warning (best-effort worktree cleanup) and the deletion continues",
       "observed": "present"
     },
     {
@@ -177,13 +177,40 @@
       "observed": "present"
     },
     {
-      "id": "client-slot:sidebar.workspaces.session.menu.item",
+      "id": "client-service:contextMenus",
       "where": "client",
-      "access": "slots.inject + slots.register",
-      "expected": "kind 'list', scope 'root', declared by the sidebar.workspaces occupant; registration {name, id, order?, label?} with id required; owner props {sessionId: SessionId, displayTitle: string}; slotInject hooks {menuOpenState: SlotHookFactory -> UseMenuOpenState (= [open, setOpen] pair), shortcuts}; must render one role='menuitem' button and close the menu via setMenuOpen(false). Shipped occupants: pin(100) rename(200) fork(300) archive(400) session-id(450) — session-id was added in 0.2.1-rc.2, so this plugin's 500 still comes last. Standard props (0.2.1-rc.2) include useWorkspaces/useSessions/useSessionStatus/useSessionRetainInfo/useResource/usePanelInfo plus the access hooks useRemoteAccess(action), useSessionAccess(sessionId, action), useWorkspaceAccess(workspaceId, action); this plugin does not use the access hooks, because its action is its own HTTP route rather than a Remote endpoint.",
-      "code": "src/client.js: SLOT, ROW_ID='delete-conversation', ROW_ORDER=500, useMenuSetOpen()",
-      "failureMode": "required — if the slot is renamed or its kind changes, the row silently does not render. An occupant list that no longer contains delete-conversation means the bundle envelope broke, not the slot.",
-      "observed": "present and registered at order 500 (after the shipped session-id row), verified live through client Slots.listSubTree on 0.2.1-rc.2"
+      "access": "ctx.get('contextMenus') — a ctx.provide member, NOT a cordis Service, so Service.listService does not list it",
+      "expected": "ContextMenus { register({id, target: K, order, observe?, resolve}), open, close, notify(text, success?, action?), resolve, active, registeredKinds }. ContextMenuTargetMap.session = { sessionId, displayTitle }. resolve returns MenuAction[] where MenuActionView carries id / label / commandId? / disabled? / icon?: {key, src?} / danger? / separatorBefore? / afterContent? / children?, and MenuAction adds failureLabel? / run?. Contributions sort by order then id; duplicate ids in one target family throw; a run rejection is a visible failure.",
+      "code": "src/client.js: activateDataPath() — one contribution for target 'session', order 900, action id 'delete-session'",
+      "failureMode": "required on 0.2.2+ — when the service is missing (0.2.1 and earlier) the plugin falls back to the legacy component row instead",
+      "observed": "present on 0.2.2-rc.3; type source read from the installed packages/client/ui-context-menu/src/client/types.ts"
+    },
+    {
+      "id": "client-slot:contextMenu.icon",
+      "where": "client",
+      "access": "ctx.slots.inject('contextMenu.icon', () => ctx.slots.register({ name: 'contextMenu.icon', key }, Icon))",
+      "expected": "keyed, root scope, inline; owner props { icon: ContextMenuIcon }. An action's icon is data ({key, src?}), never a React node, and the overlay calls renderSlot with that key.",
+      "code": "src/client.js: ICON_KEY = 'dsh-plugin-delete-conversation.delete'",
+      "failureMode": "the action still runs without a glyph when no component matches the key; renaming the slot removes the icon only",
+      "observed": "present"
+    },
+    {
+      "id": "client-slot:shell.overlay confirm dialog",
+      "where": "client",
+      "access": "ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name, id, inject }, Dialog))",
+      "expected": "list slot owned by the shell. The inject face provides hooks from bare getSnapshot/subscribe sources (hooks: { pending, status, message } become usePending/useStatus/useMessage) plus plain callbacks. The dialog renders with Modal({open, onClose, closeLabel, title, description, footer}) and Button({variant:'outline', disabled, onClick}) from @deepseek-ai/dsh-client-ui-primitives.",
+      "code": "src/client.js: makeConfirmDialog(), OVERLAY_ID = 'delete-conversation-confirm'",
+      "failureMode": "if Modal/Button are missing the plugin confirms through window.confirm() instead; if shell.overlay is renamed the confirmation disappears and must move to the new overlay slot",
+      "observed": "present; same shape as the shipped SessionArchiveConfirmDialog in @deepseek-ai/dsh-client-ui-workspace"
+    },
+    {
+      "id": "client-slot:sidebar.workspaces.session.menu.item (legacy fallback)",
+      "where": "client",
+      "access": "slots.inject + slots.register — only used when ctx.get('contextMenus') is absent",
+      "expected": "kind 'list', scope 'root', child of the keyed 'contextMenu.content' slot under key 'session'. 0.2.2 re-labelled it 'Legacy external Session menu rows ... rendered together before the built-in Archive action'; the built-in actions moved to ctx.contextMenus, so this slot can no longer place a row last. Registration {name, id, order}; owner props {sessionId, displayTitle}; slot hook useMenuOpenState = [open, setOpen].",
+      "code": "src/client.js: makeLegacyRow() behind the dataActive guard, LEGACY_SLOT / LEGACY_ROW_ORDER = 500",
+      "failureMode": "fallback only — it renders null as soon as the data action is registered, so the menu never shows two delete entries",
+      "observed": "present on 0.2.2-rc.3 with only this plugin's row registered (delete-conversation at order 500)"
     },
     {
       "id": "client-bundle:module-loader-envelope",

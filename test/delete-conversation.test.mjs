@@ -98,6 +98,13 @@ function makeHost({ home, sessionsRoot, names = ['storageDomain', 'workspaceRegi
   const registry = {
     async archiveSession(id, options) {
       state.archiveCalls.push([id, options])
+      // The shipped registry rejects an id it has never seen; the plugin must treat
+      // that as a best-effort preamble failure for a cold Session, not as fatal.
+      if (id !== SESSION_ID && id !== OTHER_ID) {
+        const unknown = new Error(`workspace: unknown session '${id}'`)
+        unknown.code = 'workspace/unknown-session'
+        throw unknown
+      }
       state.globalValue = {
         ...state.globalValue,
         archivedSessionIds: state.globalValue.archivedSessionIds.includes(id)
@@ -193,10 +200,16 @@ process.stdout.write('cold session: everything is removed, in order\n')
   assert.deepEqual(state.globalValue.archivedSessionIds, [], 'archive gate must be cleared last')
   assert.deepEqual(state.globalValue.pinnedSessionIds, [], 'pin membership must be cleared last')
   assert.equal(result.removed.projectionCacheEntry, true)
+  assert.equal(result.removed.archivedGate, true, 'the archive/stop preamble runs even for a cold session')
+  assert.deepEqual(
+    state.archiveCalls.map(([id, options]) => [id, options.stopActivity]),
+    [[SESSION_ID, true]],
+    'the preamble is one archiveSession call with stopActivity',
+  )
   assert.deepEqual(
     result.removed.domainGlobalFields,
-    ['archivedSessionIds', 'pinnedSessionIds'],
-    'the report names the membership that actually changed',
+    ['archivedSessionIds'],
+    'the preamble already dropped the pin, so only the archive gate changes afterwards',
   )
   assert.equal(hostState.layoutVerified, true, 'locating a real directory marks the layout verified')
   assert.deepEqual(state.events, [['api-session/removed', SESSION_ID]], 'the browser must be told the session is gone')
@@ -216,11 +229,16 @@ process.stdout.write('unknown session id: deletes nothing and reports no members
   assert.deepEqual(result.removed.logDirectories, [])
   assert.deepEqual(result.removed.detachedFromWorkspaces, [], 'no workspace held that id')
   assert.deepEqual(result.removed.domainGlobalFields, [], 'neither archive nor pin set held that id')
-  assert.equal(result.warnings.length, 1, 'the missing log directory is reported')
+  assert.equal(result.removed.archivedGate, false, 'the preamble failed for an unknown id, so no gate was written')
+  assert.equal(result.warnings.length, 2, 'the preamble failure and the missing log directory are both reported')
+  assert.ok(
+    result.warnings.some((warning) => warning.includes('preamble failed')),
+    'the cold best-effort preamble failure is reported, not swallowed',
+  )
   assert.deepEqual(state.records.get(WORKSPACE_ID).sessionIds, [SESSION_ID, OTHER_ID], 'real membership untouched')
   assert.equal(await exists(fixture.logDir), true, 'the real log is untouched')
   await rm(fixture.home, { recursive: true, force: true })
-  ok('fabricated id: no membership reported, nothing removed')
+  ok('fabricated id: preamble failure is a warning, nothing removed, no membership reported')
 }
 
 process.stdout.write('live session: stop first, then delete\n')
@@ -268,8 +286,9 @@ process.stdout.write('running session that refuses to stop: nothing is deleted\n
   )
   assert.equal(await exists(fixture.logDir), true, 'log must survive a refused delete')
   assert.deepEqual(state.detached, [], 'membership must not change')
+  assert.deepEqual(state.globalValue.archivedSessionIds, [], 'the archive gate is unwound on refusal')
   await rm(fixture.home, { recursive: true, force: true })
-  ok('session-still-running, log and membership untouched')
+  ok('session-still-running, log and membership untouched, gate unwound')
 }
 
 process.stdout.write('log removal failure: abort before touching membership\n')
@@ -294,9 +313,10 @@ process.stdout.write('log removal failure: abort before touching membership\n')
   assert.deepEqual(state.detached, [], 'membership must be left alone when the log survives')
   assert.deepEqual(state.cacheDeletes, [], 'the cache must not be pruned either')
   assert.deepEqual(state.records.get(WORKSPACE_ID).sessionIds, [SESSION_ID, OTHER_ID])
+  assert.deepEqual(state.globalValue.archivedSessionIds, [], 'the preamble gate is unwound when the delete aborts')
   assert.equal(await exists(fixture.logDir), true)
   await rm(fixture.home, { recursive: true, force: true })
-  ok('log-removal-failed, nothing else changed')
+  ok('log-removal-failed, nothing else changed, preamble gate unwound')
 }
 
 process.stdout.write('missing workspace domain: fail closed\n')

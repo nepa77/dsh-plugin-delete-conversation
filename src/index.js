@@ -1,5 +1,5 @@
 /**
- * dsh-plugin-delete-conversation 鈥?Host half.
+ * dsh-plugin-delete-conversation —Host half.
  *
  * WHY THIS EXISTS
  *   DSH can archive, unarchive, pin, rename and fork a Session, but nothing in
@@ -9,7 +9,7 @@
  *   capability and exposes it to the sidebar through its Client half.
  *
  * WHAT IT DELETES (all of it, or nothing)
- *   1. the running work owned by the Session 鈥?through the shipped stop path, so
+ *   1. the running work owned by the Session —through the shipped stop path, so
  *      the durable archive gate is written before any stop is requested;
  *   2. the Session's durable log directory
  *      `<dshHome>/sessions/<projectKey(cwd)>/<sessionId>/session.v*.jsonl[.zstd]`;
@@ -51,8 +51,8 @@ const path = require('node:path')
 
 const PACKAGE_NAME = 'dsh-plugin-delete-conversation'
 const ROUTE_PREFIX = '/dsh-plugin-delete-conversation'
-const VERSION = '0.1.6'
-const ADAPTED_FOR = 'DSH desktop nightly, 2026-08 (reference commit b150a551b8)'
+const VERSION = '0.1.7'
+const ADAPTED_FOR = 'DSH 0.2.2-rc.3 (desktop profile)'
 /**
  * A custom header cannot be set by a cross-origin page without a CORS preflight,
  * and this route never approves one, so drive-by web pages cannot reach it.
@@ -191,17 +191,17 @@ async function buildDoctorReport(ctx, state) {
     checks.push({ id, level, ok: Boolean(ok), detail })
 
   const storageDomain = ctx.get('storageDomain')
-  check('storageDomain.get/table', 'required', typeof storageDomain?.get === 'function', 'ctx.get("storageDomain") 鈥?mounted domain facility')
+  check('storageDomain.get/table', 'required', typeof storageDomain?.get === 'function', 'ctx.get("storageDomain") —mounted domain facility')
 
   const workspaceDomain = safeGet(() => storageDomain.get('workspace'), undefined)
-  check('domain:workspace open', 'required', typeof workspaceDomain?.table === 'function', 'storageDomain.get("workspace") 鈥?v2, single layout, opened by workspaceRegistry')
+  check('domain:workspace open', 'required', typeof workspaceDomain?.table === 'function', 'storageDomain.get("workspace") —v2, single layout, opened by workspaceRegistry')
 
   const workspacesTable = safeGet(() => workspaceDomain.table('workspaces'), undefined)
   check(
     'domain-table:workspace.workspaces',
     'fallback',
     typeof workspacesTable?.entries === 'function' && typeof workspacesTable?.put === 'function',
-    'record {path,title,sessionIds,createdAt,updatedAt} 鈥?used only when Workspace.detachSession is unavailable',
+    'record {path,title,sessionIds,createdAt,updatedAt} —used only when Workspace.detachSession is unavailable',
   )
 
   const domainGlobal = safeGet(() => workspaceDomain.global, undefined)
@@ -209,7 +209,7 @@ async function buildDoctorReport(ctx, state) {
     'domain-global:workspace',
     'fallback',
     typeof domainGlobal?.get === 'function' && typeof domainGlobal?.set === 'function',
-    '{initialized,defaultWorkspaceId,workspaceIds,archivedSessionIds,pinnedSessionIds,pendingMutation?} 鈥?used only when unarchiveSession/unpinSession are unavailable',
+    '{initialized,defaultWorkspaceId,workspaceIds,archivedSessionIds,pinnedSessionIds,pendingMutation?} —used only when unarchiveSession/unpinSession are unavailable',
   )
 
   const registry = ctx.get('workspaceRegistry')
@@ -225,7 +225,7 @@ async function buildDoctorReport(ctx, state) {
     'domain-table:session_projcache.sessions',
     'optional',
     typeof projcacheTable?.delete === 'function',
-    'projection cache (derived data) 鈥?falls back to unlinking <dshHome>/storages/session_projcache/sessions/<id>.json',
+    'projection cache (derived data) —falls back to unlinking <dshHome>/storages/session_projcache/sessions/<id>.json',
   )
 
   check('webServer.register', 'required', typeof ctx.get('webServer')?.register === 'function', 'ctx.get("webServer").register({kind,path,handler})')
@@ -248,7 +248,7 @@ async function buildDoctorReport(ctx, state) {
     'layout:session-dir',
     'info',
     state.layoutVerified,
-    'expected layout <root>/<projectKey(cwd)>/<sessionId>/session.v*.jsonl[.zstd] 鈥?set to true once a delete has located a real session directory',
+    'expected layout <root>/<projectKey(cwd)>/<sessionId>/session.v*.jsonl[.zstd] —set to true once a delete has located a real session directory',
   )
 
   const required = checks.filter((entry) => entry.level === 'required')
@@ -305,6 +305,7 @@ async function deleteConversation(ctx, state, sessionId, options = {}) {
   const warnings = []
   const removed = {
     stoppedActivity: false,
+    archivedGate: false,
     logDirectories: [],
     projectionCacheEntry: false,
     detachedFromWorkspaces: [],
@@ -328,26 +329,47 @@ async function deleteConversation(ctx, state, sessionId, options = {}) {
   const agents = ctx.get('agents')
   const persistence = ctx.get('sessionPersistence')
 
-  // ---- 0. stop live work ------------------------------------------------
+  // ---- 0. stop live work, write the durable gate, let derived state clean up
   const live = safeGet(() => sessions?.get(sessionId), undefined) !== undefined || isRunning(agents, sessionId)
-  if (live) {
-    if (!stopActivity) throw codedError('session-running', 'the conversation is running; pass stopActivity to stop it first')
-    if (typeof registry?.archiveSession !== 'function') {
-      throw codedError('stop-path-unavailable', 'the conversation is running and ctx.get("workspaceRegistry").archiveSession is unavailable, so it cannot be stopped safely')
-    }
-    // The shipped path owns the order that makes this safe: the durable archive
-    // gate is written first, then `workspace/session-stop` asks every provider
-    // (turn, jobs, subagents, schedules) to stop. The gate is cleared at the end.
-    await registry.archiveSession(sessionId, { stopActivity: true })
-    removed.stoppedActivity = true
-    const deadline = Date.now() + 5000
-    while (isRunning(agents, sessionId) && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 100))
-    }
-    if (isRunning(agents, sessionId)) {
-      throw codedError('session-still-running', 'the conversation is still running after the stop request 鈥?nothing was deleted')
+  const canArchive = typeof registry?.archiveSession === 'function'
+  if (live && !stopActivity) {
+    throw codedError('session-running', 'the conversation is running; pass stopActivity to stop it first')
+  }
+  if (live && !canArchive) {
+    throw codedError('stop-path-unavailable', 'the conversation is running and ctx.get("workspaceRegistry").archiveSession is unavailable, so it cannot be stopped safely')
+  }
+  // The shipped path owns the order that makes this safe: the durable archive gate
+  // is written first, then `workspace/session-stop` asks every provider (turn, jobs,
+  // subagents, schedules) to stop. Since 0.2.2 archiving also lets the worktree
+  // service drop the Session's clean checkout, so this preamble runs for a cold
+  // Session too. The gate is cleared at step 4, or unwound below on failure.
+  let archivedGate = false
+  if (canArchive) {
+    try {
+      await registry.archiveSession(sessionId, { stopActivity: true })
+      archivedGate = true
+      removed.archivedGate = true
+      if (live) removed.stoppedActivity = true
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      if (live) throw codedError('stop-failed', `could not stop the running conversation: ${message}`)
+      // Cold Session: the preamble is best-effort (worktree cleanup), so a failure
+      // here must not block the deletion itself.
+      warnings.push(`the archive/stop preamble failed for a cold session (continuing): ${message}`)
     }
   }
+  // With the gate written, any later failure unwinds it so a refused delete leaves
+  // the Session exactly as it was: still listed, still unarchived.
+  try {
+    if (live) {
+      const deadline = Date.now() + 5000
+      while (isRunning(agents, sessionId) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      if (isRunning(agents, sessionId)) {
+        throw codedError('session-still-running', 'the conversation is still running after the stop request — nothing was deleted')
+      }
+    }
 
   // ---- 1. the durable log (the step that can fail on a locked file) -----
   const directories = await findSessionDirs(state, sessionId)
@@ -489,10 +511,21 @@ async function deleteConversation(ctx, state, sessionId, options = {}) {
   }
 
   // ---- 5. verify -------------------------------------------------------
+  } catch (cause) {
+    // Undo the best-effort gate so a failed deletion changes nothing observable.
+    if (archivedGate) {
+      const unarchive = safeGet(() => registry?.unarchiveSession, undefined)
+      if (typeof unarchive === 'function') {
+        await Promise.resolve(unarchive.call(registry, sessionId)).catch(() => {})
+      }
+    }
+    throw cause
+  }
+
   // ---- 5. tell the rest of DSH the Session is gone ----------------------
   // `api-session/removed` is the shipped "a Session left the live Host registry"
-  // notification. Every consumer that builds its own list 鈥?the browser's session
-  // model above all 鈥?rebuilds from it, which is what stops a deleted
+  // notification. Every consumer that builds its own list —the browser's session
+  // model above all —rebuilds from it, which is what stops a deleted
   // conversation from reappearing in the sidebar's "ungrouped" bucket purely
   // because the browser still had it cached. Without this, deleting a session
   // whose durable artifacts are gone still looks like "moved to ungrouped".
@@ -698,7 +731,7 @@ function apply(ctx) {
     .then((report) => {
       if (report.requiredFailures.length > 0) {
         ctx.logger?.warn?.(
-          `[${PACKAGE_NAME}] ${VERSION} needs adaptation for this DSH build 鈥?missing: ${report.requiredFailures.join(', ')}. ` +
+          `[${PACKAGE_NAME}] ${VERSION} needs adaptation for this DSH build —missing: ${report.requiredFailures.join(', ')}. ` +
             `GET ${ROUTE_PREFIX}/doctor and the dsh-plugin-delete-conversation skill explain what to change.`,
         )
       } else {

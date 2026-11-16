@@ -11,17 +11,18 @@ Harness 本身只提供归档：归档会把会话移出列表，但完整保留
 | 菜单项 | 内容 |
 |---|---|
 | 前面若干项（Harness 自带） | 置顶会话 / 重命名 / 分叉会话 / 归档会话 / 会话 ID |
-| 最后一项（本插件） | **红色垃圾桶图标 + 删除会话** |
+| 最后一项（本插件） | **红色垃圾桶图标 + 删除会话**（上方有一条分组分隔线） |
 
-- 字号、行高、图标格、间距与悬停底色都直接使用 Harness 自带的菜单行组件（`MenuItemButton` 的 `danger` 变体）与图标（`IconTrashOutlineRegular`），因此与上面几行完全一致，并跟随主题的深浅色。
-- **需要点两次**：第一次点，文字变成「再次点击确认删除」，6 秒内不点会自动还原；第二次才真正执行。
-- 删除失败时这一行就地显示原因，不会静默失败。
+- 这一项以 Harness 自己的**右键菜单动作**注册（`ctx.contextMenus` 的 `session` 目标，`danger: true`、`separatorBefore: true`，排在所有内置动作之后），图标通过 keyed Slot `contextMenu.icon` 渲染 `IconTrashOutlineRegular`，因此红字、红色悬停与分隔线都跟随主题。
+- **选中后先弹确认框**（Harness 自带的 `Modal` + `Button`），写明标题与后果；确认才真正执行，取消不做任何改动。删除失败时确认框保留并显示原因。
+- 在没有 `ctx.contextMenus` 的旧版 Harness 上，插件自动退回旧式组件行（同一行、同样的红色与图标，点两次确认），功能不丢失。
 
 ## 删除范围
 
 | 对象 | 位置 | 处理方式 |
 |---|---|---|
 | 正在运行的工作（回合、后台任务、子智能体、定时提醒） | — | 先走 Harness 自带的归档停止路径：先写持久化闸门，再发 `workspace/session-stop` |
+| 会话的工作树（Harness 0.2.2 起） | 该会话创建的检出目录 | 同一段归档前置里由 Harness 的工作树服务按 Git 判定清理；无法安全删除时保留并提示 |
 | 事件日志 | `<dshHome>/sessions/<项目>/<sessionId>/`（`session.v*.jsonl[.zstd]`） | 直接删除该目录（Harness 没有对应接口） |
 | 投影缓存 | `session_projcache` 域 → `<dshHome>/storages/session_projcache/sessions/<id>.json` | 通过存储域删除该记录 |
 | 工作区归属 | `workspace` 域的 `workspaces` 表 `sessionIds` | 优先调用 `Workspace.detachSession` |
@@ -35,8 +36,9 @@ Harness 本身只提供归档：归档会把会话移出列表，但完整保留
 ## 安全设计
 
 - **先检查再动手**：所有必需依赖面在写入任何东西之前检查一遍，缺任何一项就以明确的错误码中止，会话保持原样。
-- **先停再删**：仍在运行的会话走 Harness 自带的停止路径，并轮询到运行状态结束；停不下来就绝不删。
+- **先停再删**：归档/停止前置对每个会话都执行（这也是工作树清理的入口），仍在运行的会话会被轮询到运行状态结束；停不下来就绝不删。
 - **先删日志，再改列表**：日志删不掉时（例如 Windows 上文件被占用），工作区列表保持原样，不会留下"列表里还在、文件已经没了"的幽灵会话。
+- **失败即回滚**：前置写入的归档闸门在后续任何一步失败时都会被撤销，所以一次被拒绝的删除不会让会话从列表里消失。
 - **删完通知**：成功后向 Harness 发出 `api-session/removed`，各消费方据此重建列表，被删除的会话不会残留在"未分组"里。
 - **网页打不到**：删除路由要求一个自定义请求头，跨站页面无法在不触发 CORS 预检的情况下设置它。这不是对本机其它进程的防护——那些进程本来就能直接读写会话文件。
 
@@ -76,8 +78,9 @@ dsh plugin --profile desktop add /path/to/dsh-plugin-delete-conversation-0.1.5.t
 
 ## 使用
 
-1. 侧边栏 → 某个会话 → `…` → **删除会话** → 再点一次。
-2. 该会话从列表消失；磁盘上的日志、投影缓存与工作区归属一并清除。
+1. 侧边栏 → 某个会话 → `…` → **删除会话**。
+2. 确认框里核对会话标题后点 **删除**（点 **取消** 或关闭确认框不做任何改动）。
+3. 该会话从列表消失；磁盘上的日志、投影缓存与工作区归属一并清除。
 
 也可以直接调用 HTTP 接口，便于脚本化：
 
@@ -153,6 +156,7 @@ node test/delete-conversation.test.mjs
 Harness 的插件接口不承诺长期稳定，本插件针对这一点设计：
 
 - 宿主半边**不导入任何 `@deepseek-ai/*` 包**，所有能力都用 `ctx.get(名称)` 取用并做能力检测，所以某个接口改名或消失时，降级的是这个插件，而不是整个 profile 的启动。
+- 浏览器半边只 `require` 平台基线模块（`react` 与 `@deepseek-ai/dsh-client-ui-primitives`），菜单与确认框都走 Harness 当前版本的官方扩展点：0.2.2 起用 `ctx.contextMenus` 的数据动作 + `contextMenu.icon` + `shell.overlay`；更早的版本自动退回旧式菜单行。
 - **故意不声明 `@deepseek-ai/dsh-*` 的 peer 依赖**，因此升级 Harness 不会因为版本门被拒绝加载；真正的兼容性检查是 doctor。
 
 Harness 升级之后：
@@ -170,13 +174,15 @@ Harness 升级之后：
 
 宿主半边在 `ctx.get('webServer')` 上注册两个路由（`GET …/doctor`、`POST …/delete`），浏览器半边用同源 `fetch` 调用。这里没有使用 Harness 自带的 `ctx.remote`，因为它需要生成的 Typert 产物，而本插件刻意不带构建步骤。请求必须带自定义请求头，理由见"安全设计"。
 
+菜单与确认框也不是自绘的：动作注册进 Harness 的右键菜单服务，确认框注册进 `shell.overlay` 并用 Harness 的 `Modal` / `Button` 渲染，因此外观、键盘操作与焦点返回都和内置动作一致。
+
 ## 目录结构
 
 ```
 package.json                 插件清单：dsh.bundle.patch + dsh.client，无第三方依赖
 cordis.patch.yml             该 bundle 贡献的 profile 配置层：插入一行 delete-conversation
 src/index.js                 宿主半边：删除算法、HTTP 路由、doctor()、注册适配技能
-src/client.js                浏览器半边：侧边栏菜单行（手写 lazy-CJS bundle，无构建）
+src/client.js                浏览器半边：右键菜单动作 + 确认框（手写 lazy-CJS bundle，无构建）
 skill/dsh-plugin-delete-conversation/SKILL.md  升级后的适配手册
 compat/expected-surface.json 依赖面契约记录
 test/delete-conversation.test.mjs  零依赖测试
@@ -203,4 +209,4 @@ MIT，见 [LICENSE](LICENSE)。
 - **删除当前正在查看的会话**后，会话视图会短暂停留在一个已不存在的会话上，切换会话或刷新后恢复。
 - **会话 id 的校验**为 `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`；日志目录只在 `<sessionsRoot>/<一层子目录>/<id>/` 之内删除。
 - **宿主半边用原生 `node:fs` 删除日志**（`ctx.fs` 没有删除能力），因此这一步不经过 Harness 的文件沙箱。
-- **浏览器半边没有构建步骤**：手写 bundle 使用 Harness 自带的菜单行组件与垃圾桶图标；若将来 Harness 改变 bundle 的加载约定，需要改为真正的构建产物。
+- **浏览器半边没有构建步骤**：手写 bundle 只 `require` 平台基线模块；若 `Modal` / `Button` 原语缺失，确认框退回浏览器原生确认对话框，动作本身仍然可用。若将来 Harness 改变 bundle 的加载约定，需要改为真正的构建产物。
